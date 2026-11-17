@@ -1,0 +1,53 @@
+# Runs the property_maintenance_mcp server in a container.
+# The database is Neon (remote) — read from .env, not a local Postgres service.
+#
+# Bring up:
+#     docker compose up --build
+# Then point an MCP client at http://localhost:8000/mcp
+
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Server-side overrides only — DATABASE_URL, OPENAI_API_KEY, LANGFUSE_*
+      # come from .env above.
+      MCP_TRANSPORT: streamable-http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+    ports:
+      - "8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 256M
+
+  # AI gateway for the cost/latency bake-off. One OpenAI-compatible endpoint
+  # (:4000) fronting OpenAI, Gemini, and Moonshot — the agent only ever talks
+  # to this. Provider keys come from .env; clients authenticate with the master key.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    # Deliberately NOT env_file: .env — that injects DATABASE_URL, which puts litellm
+    # in DB mode (Prisma migrations against Neon on every boot, stray litellm tables).
+    # As a pure gateway it only needs the provider keys, interpolated from .env below.
+    environment:
+      LITELLM_MASTER_KEY: sk-litellm-dev
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    ports:
+      - "4000:4000"
